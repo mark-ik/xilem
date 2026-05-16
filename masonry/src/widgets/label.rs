@@ -109,11 +109,12 @@ impl TextLayout {
         }
         self.alignment = alignment;
         self.alignment_width = alignment_width;
-        self.layout.align(
-            Some(self.alignment_width),
-            self.alignment,
-            TextAlignOptions::default(),
-        );
+        // parley 0.9 dropped the `Option<f32>` width arg from `align()`;
+        // alignment width is now driven by `set_layout_max_advance` on the
+        // line breaker upstream. `self.alignment_width` remains the
+        // widget-facing knob the caller specifies but is now applied
+        // through that path rather than this call.
+        self.layout.align(self.alignment, TextAlignOptions::default());
     }
 
     /// Returns `true` if this layout would be the result for `max_advance`.

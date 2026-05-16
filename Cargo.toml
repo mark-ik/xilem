@@ -55,16 +55,26 @@ tree_arena = { version = "0.2.0", path = "tree_arena" }
 include_doc_path = { version = "0.1.0", path = "include_doc_path", package = "linebender_include_doc_path" }
 
 anymore = "1.0.0"
-imaging = "0.0.1"
-imaging_wgpu = { version = "0.0.1", features = ["wgpu-28"] }
-imaging_skia = { version = "0.0.1", features = ["gpu"] }
-imaging_vello = "0.0.1"
-imaging_vello_hybrid = "0.0.1"
-imaging_vello_cpu = "0.0.1"
-vello = { version = "0.8.0", default-features = false, features = ["wgpu"] }
-wgpu = "28.0.0"
+# Local fork (../imaging) on branch `mere-wgpu-29-vello-0-9` — adds
+# `wgpu-29` + `vello-0-9` features the upstream doesn't ship yet.
+# Drop back to the github git-rev pin when forest-rs/imaging merges the
+# additions upstream.
+imaging = { path = "../imaging/imaging" }
+imaging_wgpu = { path = "../imaging/imaging_wgpu", default-features = false, features = [
+    "wgpu-29",
+] }
+imaging_vello = { path = "../imaging/imaging_vello", default-features = false, features = [
+    "vello-0-9",
+] }
+imaging_vello_hybrid = { path = "../imaging/imaging_vello_hybrid" }
+imaging_vello_cpu = { path = "../imaging/imaging_vello_cpu" }
+imaging_skia = { path = "../imaging/imaging_skia", features = [
+    "gpu",
+] }
+vello = { version = "0.9.0", default-features = false, features = ["wgpu"] }
+wgpu = "29.0.3"
 kurbo = "0.13.1"
-parley = { version = "0.8.0", features = ["accesskit"] }
+parley = { version = "0.9.0", features = ["accesskit"] }
 # TODO: Use no_std correctly in Xilem Web.
 peniko = "0.6.1"
 winit = "0.30.13"
