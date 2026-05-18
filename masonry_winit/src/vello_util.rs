@@ -61,11 +61,17 @@ impl RenderContext {
         let backends = wgpu::Backends::from_env().unwrap_or_default();
         let flags = wgpu::InstanceFlags::from_build_config().with_env();
         let backend_options = wgpu::BackendOptions::from_env_or_default();
-        let instance = Instance::new(&wgpu::InstanceDescriptor {
+        // wgpu 29: `Instance::new` takes the descriptor by value, and
+        // the descriptor gained a `display` field (Option<Box<dyn
+        // WgpuHasDisplayHandle>>). `None` is fine on Vulkan, Metal,
+        // and Dx12; GLES on Wayland would want an owned display
+        // handle here.
+        let instance = Instance::new(wgpu::InstanceDescriptor {
             backends,
             flags,
             backend_options,
             memory_budget_thresholds: MemoryBudgetThresholds::default(),
+            display: None,
         });
         Self {
             instance,

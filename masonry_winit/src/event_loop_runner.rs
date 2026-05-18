@@ -749,26 +749,43 @@ impl MasonryState<'_> {
         window: &Window,
         render_cx: &RenderContext,
     ) -> Option<wgpu::SurfaceTexture> {
+        // wgpu 29: `get_current_texture` now returns the
+        // `CurrentSurfaceTexture` enum directly rather than a
+        // `Result<SurfaceTexture, SurfaceError>`. Variants:
+        // Success, Suboptimal, Timeout, Occluded, Outdated, Lost,
+        // Validation.
+        use wgpu::CurrentSurfaceTexture as Cst;
         match surface.surface.get_current_texture() {
-            Ok(texture) => Some(texture),
-            Err(wgpu::SurfaceError::Outdated) => {
+            Cst::Success(texture) | Cst::Suboptimal(texture) => Some(texture),
+            Cst::Outdated => {
+                // Reconfigure the surface to the current window size
+                // and retry once. This is the recovery path for
+                // resize / DPI changes.
                 let size = window.handle.inner_size();
                 render_cx.resize_surface(surface, size.width, size.height);
 
                 match surface.surface.get_current_texture() {
-                    Ok(texture) => Some(texture),
-                    Err(err) => {
-                        // This is a common occurrence on X11 and Xwayland with NVIDIA drivers
-                        // when opening and resizing the window.
+                    Cst::Success(texture) | Cst::Suboptimal(texture) => Some(texture),
+                    other => {
+                        // This is a common occurrence on X11 and
+                        // Xwayland with NVIDIA drivers when opening
+                        // and resizing the window.
                         tracing::error!(
-                            "Couldn't get swap chain texture after configuring. Cause: '{err}'"
+                            "Couldn't get swap chain texture after configuring. Status: {other:?}"
                         );
                         None
                     }
                 }
             }
-            Err(err) => {
-                tracing::error!("Couldn't get swap chain texture, operation unrecoverable: {err}");
+            Cst::Timeout => {
+                tracing::warn!("Swap chain timeout — skipping this frame.");
+                None
+            }
+            Cst::Occluded => None,
+            other @ (Cst::Lost | Cst::Validation) => {
+                tracing::error!(
+                    "Couldn't get swap chain texture, operation unrecoverable: {other:?}"
+                );
                 None
             }
         }
