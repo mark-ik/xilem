@@ -66,6 +66,48 @@ pub struct WgpuContext<'a> {
     pub queue: &'a wgpu::Queue,
 }
 
+/// One `VisualLayerKind::External` layer to be realized by the embedder,
+/// in painter order. Its content is drawn into [`Self::bounds`] on the
+/// surface during [`AppDriver::composite_external_layers`].
+#[derive(Clone, Copy, Debug)]
+pub struct ExternalLayer {
+    /// The widget that requested the external layer (via
+    /// `RenderRootOptions`/`push_external_layer`). The embedder uses this
+    /// to decide which content belongs in this region.
+    pub widget_id: WidgetId,
+    /// Destination on the surface in physical pixels, `[x, y, width, height]`.
+    pub bounds: [u32; 4],
+}
+
+/// Per-frame access for compositing externally-realized layers
+/// (`VisualLayerKind::External`) onto the window surface.
+///
+/// Masonry calls [`AppDriver::composite_external_layers`] after rendering
+/// its own widget content into [`Self::target_texture`] and before
+/// presenting. The embedder draws each [`ExternalLayer`]'s content —
+/// rendered on the **shared** [`Self::device`] (the same device handed
+/// out by [`AppDriver::on_wgpu_ready`]) — into the layer's bounds, e.g.
+/// via `copy_texture_to_texture` from a content texture. Because the
+/// device is shared, this needs no GPU→CPU readback.
+///
+/// `target_texture` is `Rgba8Unorm` with `COPY_DST` + `RENDER_ATTACHMENT`
+/// usage; Masonry blits it to the swapchain on present, so anything
+/// composited here appears in the frame.
+pub struct ExternalCompositeCtx<'a> {
+    /// The shared WGPU device (same as [`WgpuContext::device`]).
+    pub device: &'a wgpu::Device,
+    /// The shared WGPU queue.
+    pub queue: &'a wgpu::Queue,
+    /// Masonry's intermediate render target. Composite content into here.
+    pub target_texture: &'a wgpu::Texture,
+    /// A default view of [`Self::target_texture`].
+    pub target_view: &'a wgpu::TextureView,
+    /// Surface size in physical pixels, `(width, height)`.
+    pub surface_size: (u32, u32),
+    /// External layers to realize this frame, in painter order.
+    pub layers: &'a [ExternalLayer],
+}
+
 /// Strategy for selecting `wgpu::Limits` when requesting the WGPU device.
 #[derive(Clone, Debug, Default)]
 pub enum WgpuLimits {
@@ -127,6 +169,14 @@ pub trait AppDriver {
 
     /// Called when Masonry has created its WGPU device.
     fn on_wgpu_ready(&mut self, _wgpu: &WgpuContext<'_>) {}
+
+    /// Called each frame, after Masonry renders its widget content and
+    /// before present, when the frame contains `VisualLayerKind::External`
+    /// layers. The embedder composites each layer's externally-realized
+    /// content (rendered on the shared device) into its bounds on
+    /// [`ExternalCompositeCtx::target_texture`]. Default: no-op (the
+    /// layers are left as reserved holes).
+    fn composite_external_layers(&mut self, _ctx: &mut ExternalCompositeCtx<'_>) {}
 }
 
 impl DriverCtx<'_, '_> {

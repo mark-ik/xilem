@@ -35,7 +35,7 @@ use crate::app::{
     AppDriver, DriverCtx, WgpuContext, WgpuLimits, masonry_resize_direction_to_winit,
     winit_ime_to_masonry,
 };
-use crate::app_driver::WindowId;
+use crate::app_driver::{ExternalCompositeCtx, ExternalLayer, WindowId};
 use crate::vello_util::{RenderContext, RenderSurface};
 
 /// The custom event type that we inject into winit's [`EventLoop`](winit::event_loop::EventLoop).
@@ -669,6 +669,43 @@ impl MasonryState<'_> {
         }
 
         let (visual_layers, tree_update) = window.render_root.redraw();
+
+        // Collect `External` layers (externally-realized content holes).
+        // Kurbo coords are logical px; scale to physical for the surface.
+        // Each layer's transform maps layer-local → window (logical) space.
+        let scale = window.handle.scale_factor();
+        let external: Vec<ExternalLayer> = visual_layers
+            .layers
+            .iter()
+            .filter_map(|layer| {
+                let VisualLayerKind::External { bounds } = &layer.kind else {
+                    return None;
+                };
+                let m = layer.transform.as_coeffs(); // [a, b, c, d, e, f]
+                let tx = |x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+                let corners = [
+                    tx(bounds.x0, bounds.y0),
+                    tx(bounds.x1, bounds.y0),
+                    tx(bounds.x0, bounds.y1),
+                    tx(bounds.x1, bounds.y1),
+                ];
+                let min_x = corners.iter().map(|c| c.0).fold(f64::INFINITY, f64::min);
+                let min_y = corners.iter().map(|c| c.1).fold(f64::INFINITY, f64::min);
+                let max_x = corners.iter().map(|c| c.0).fold(f64::NEG_INFINITY, f64::max);
+                let max_y = corners.iter().map(|c| c.1).fold(f64::NEG_INFINITY, f64::max);
+                let px = (min_x * scale).round().max(0.0) as u32;
+                let py = (min_y * scale).round().max(0.0) as u32;
+                let pw = (((max_x - min_x) * scale).round().max(0.0) as u32)
+                    .min(size.width.saturating_sub(px));
+                let ph = (((max_y - min_y) * scale).round().max(0.0) as u32)
+                    .min(size.height.saturating_sub(py));
+                (pw > 0 && ph > 0).then_some(ExternalLayer {
+                    widget_id: layer.widget_id,
+                    bounds: [px, py, pw, ph],
+                })
+            })
+            .collect();
+
         let overlays: Vec<_> = visual_layers
             .overlay_layers()
             .map(|layer| {
@@ -696,7 +733,15 @@ impl MasonryState<'_> {
             root_scene,
             &overlays,
         );
-        Self::render(surface, window, frame, &self.render_cx, &mut self.renderer);
+        Self::render(
+            surface,
+            window,
+            frame,
+            &self.render_cx,
+            &mut self.renderer,
+            &external,
+            app_driver,
+        );
         #[cfg(feature = "tracy")]
         drop(self.frame.take());
         if let Some(tree_update) = tree_update {
@@ -711,6 +756,8 @@ impl MasonryState<'_> {
         frame: PreparedFrame<'_>,
         render_cx: &RenderContext,
         renderer: &mut ImagingRenderer,
+        external: &[ExternalLayer],
+        app_driver: &mut dyn AppDriver,
     ) {
         let dev_id = surface.dev_id;
         let device = &render_cx.devices[dev_id].device;
@@ -741,6 +788,22 @@ impl MasonryState<'_> {
             );
             return;
         }
+
+        // Let the embedder composite externally-realized layers (e.g.
+        // serval web content) into their bounds on the shared device,
+        // after Masonry's own content and before the present blit.
+        if !external.is_empty() {
+            let mut ctx = ExternalCompositeCtx {
+                device,
+                queue,
+                target_texture: &surface.target_texture,
+                target_view: &surface.target_view,
+                surface_size: (surface.config.width, surface.config.height),
+                layers: external,
+            };
+            app_driver.composite_external_layers(&mut ctx);
+        }
+
         Self::present_surface(surface, surface_texture, &window.handle, device, queue);
     }
 
