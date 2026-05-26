@@ -57,11 +57,15 @@ where
         min_bar_area: 6.px(),
         solid_bar: false,
         draggable: true,
+        on_split_changed: None,
         child1,
         child2,
         phantom: PhantomData,
     }
 }
+
+/// Callback type for [`Split::on_split_changed`].
+type SplitChanged<State, Action> = Box<dyn Fn(&mut State, f64) -> Action + Send + Sync>;
 
 /// The [`View`] created by [`split`].
 ///
@@ -75,6 +79,7 @@ pub struct Split<ChildA, ChildB, State, Action = ()> {
     min_bar_area: Length,
     solid_bar: bool,
     draggable: bool,
+    on_split_changed: Option<SplitChanged<State, Action>>,
     child1: ChildA,
     child2: ChildB,
     phantom: PhantomData<fn() -> (State, Action)>,
@@ -170,6 +175,17 @@ impl<ChildA, ChildB, State, Action> Split<ChildA, ChildB, State, Action> {
         self.solid_bar = solid;
         self
     }
+
+    /// Set a callback fired when the user finishes dragging the splitter
+    /// bar, with the new position as an effective fraction (`0.0..=1.0`).
+    /// Lets a host persist the split (e.g. across views / restarts).
+    pub fn on_split_changed(
+        mut self,
+        callback: impl Fn(&mut State, f64) -> Action + Send + Sync + 'static,
+    ) -> Self {
+        self.on_split_changed = Some(Box::new(callback));
+        self
+    }
 }
 
 // Use a distinctive number here, to be able to catch bugs.
@@ -201,16 +217,18 @@ where
         let (child2, child2_state) =
             ctx.with_id(CHILD2_VIEW_ID, |ctx| self.child2.build(ctx, app_state));
 
-        let widget_pod = ctx.create_pod(
-            widgets::Split::new(child1.new_widget, child2.new_widget)
-                .split_axis(self.split_axis)
-                .split_point(self.split_point)
-                .min_lengths(self.min_lengths.0, self.min_lengths.1)
-                .bar_thickness(self.bar_thickness)
-                .min_bar_area(self.min_bar_area)
-                .draggable(self.draggable)
-                .solid_bar(self.solid_bar),
-        );
+        let widget_pod = ctx.with_action_widget(|ctx| {
+            ctx.create_pod(
+                widgets::Split::new(child1.new_widget, child2.new_widget)
+                    .split_axis(self.split_axis)
+                    .split_point(self.split_point)
+                    .min_lengths(self.min_lengths.0, self.min_lengths.1)
+                    .bar_thickness(self.bar_thickness)
+                    .min_bar_area(self.min_bar_area)
+                    .draggable(self.draggable)
+                    .solid_bar(self.solid_bar),
+            )
+        });
 
         (widget_pod, (child1_state, child2_state))
     }
@@ -285,6 +303,8 @@ where
 
         let child2_element = widgets::Split::child2_mut(&mut element);
         self.child2.teardown(&mut view_state.1, ctx, child2_element);
+
+        ctx.teardown_action_source(element);
     }
 
     fn message(
@@ -305,6 +325,15 @@ where
                 self.child2
                     .message(&mut view_state.1, message, child2_element, app_state)
             }
+            // The split's own action (bar drag finished) addresses this
+            // view directly, with no child id.
+            None => match message.take_message::<widgets::SplitDragged>() {
+                Some(dragged) => match &self.on_split_changed {
+                    Some(callback) => MessageResult::Action(callback(app_state, dragged.0)),
+                    None => MessageResult::Nop,
+                },
+                None => MessageResult::Stale,
+            },
             view_id => {
                 tracing::error!(
                     ?message,

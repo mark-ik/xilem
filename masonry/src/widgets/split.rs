@@ -8,7 +8,7 @@ use tracing::{Span, trace_span};
 use crate::core::keyboard::{Key, NamedKey};
 use crate::core::{
     AccessCtx, AccessEvent, ChildrenIds, CursorIcon, EventCtx, FromDynWidget, LayoutCtx,
-    MeasureCtx, NewWidget, NoAction, PaintCtx, PointerButtonEvent, PointerEvent, PointerUpdate,
+    MeasureCtx, NewWidget, PaintCtx, PointerButtonEvent, PointerEvent, PointerUpdate,
     PropertiesMut, PropertiesRef, QueryCtx, RegisterCtx, TextEvent, Update, UpdateCtx, Widget,
     WidgetId, WidgetMut, WidgetPod,
 };
@@ -35,6 +35,12 @@ pub enum SplitPoint {
     FromEnd(Length),
 }
 
+/// Action emitted when the user finishes dragging the splitter bar.
+/// Carries the new split position as an effective fraction (`0.0..=1.0`)
+/// of the available space, so a host can persist it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplitDragged(pub f64);
+
 /// A container containing two other widgets, splitting the area either horizontally or vertically.
 ///
 #[doc = concat!(
@@ -59,6 +65,9 @@ where
     /// This is used to ensure a click without moving is a no-op,
     /// instead of re-centering the bar to the click position.
     click_offset: f64,
+    /// True while an active bar-drag is in progress, so pointer-up can
+    /// emit a [`SplitDragged`] only after a real drag (not a bare click).
+    dragging: bool,
     child1: WidgetPod<ChildA>,
     child2: WidgetPod<ChildB>,
 }
@@ -77,6 +86,7 @@ impl<ChildA: Widget + ?Sized, ChildB: Widget + ?Sized> Split<ChildA, ChildB> {
             solid: false,
             draggable: true,
             click_offset: 0.0,
+            dragging: false,
             child1: child1.to_pod(),
             child2: child2.to_pod(),
         }
@@ -444,7 +454,7 @@ where
     ChildA: Widget + ?Sized,
     ChildB: Widget + ?Sized,
 {
-    type Action = NoAction;
+    type Action = SplitDragged;
 
     fn accepts_focus(&self) -> bool {
         true
@@ -479,10 +489,16 @@ where
                     // If widget has pointer capture, assume always it's hovered
                     let effective_center = pos - self.click_offset;
                     self.update_split_point_from_bar_center(length, effective_center);
+                    self.dragging = true;
                     ctx.request_layout();
                 }
                 PointerEvent::Up(..) | PointerEvent::Cancel(..) => {
                     self.click_offset = 0.0;
+                    if self.dragging {
+                        self.dragging = false;
+                        // Report the resolved fraction so a host can persist it.
+                        ctx.submit_action::<Self::Action>(SplitDragged(self.split_point_effective));
+                    }
                 }
                 _ => {}
             }

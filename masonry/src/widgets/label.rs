@@ -114,7 +114,8 @@ impl TextLayout {
         // line breaker upstream. `self.alignment_width` remains the
         // widget-facing knob the caller specifies but is now applied
         // through that path rather than this call.
-        self.layout.align(self.alignment, TextAlignOptions::default());
+        self.layout
+            .align(self.alignment, TextAlignOptions::default());
     }
 
     /// Returns `true` if this layout would be the result for `max_advance`.

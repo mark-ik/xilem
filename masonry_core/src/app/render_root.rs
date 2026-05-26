@@ -413,6 +413,21 @@ impl RenderRoot {
         &mut self.property_arena
     }
 
+    /// Replace the tree-wide default properties at runtime and mark
+    /// every widget for repaint.
+    ///
+    /// The default property set is normally fixed at construction.
+    /// This lets a host swap it mid-session — e.g. a light/dark theme
+    /// toggle that re-colors widgets relying on default `ContentColor`
+    /// / `Background` rather than per-widget overrides. Only repaint is
+    /// requested (default-property *color* changes don't affect
+    /// layout); if a swap ever changes layout-affecting defaults
+    /// (padding, border width), request layout separately.
+    pub fn set_default_properties(&mut self, default_properties: Arc<DefaultProperties>) {
+        self.property_arena.default_properties = default_properties;
+        self.request_render_all();
+    }
+
     pub(crate) fn root_id(&self) -> WidgetId {
         self.layer_stack.id()
     }

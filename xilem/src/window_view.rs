@@ -1,6 +1,9 @@
 // Copyright 2025 the Xilem Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
+use masonry::core::DefaultProperties;
 use masonry::{theme::BACKGROUND_COLOR, util::debug_panic};
 use masonry_winit::app::{NewWindow, Window, WindowId};
 
@@ -16,6 +19,13 @@ pub struct WindowView<State: 'static> {
     pub(crate) masonry_root: MasonryRoot<State>,
     /// The base color of the window.
     pub(crate) base_color: Option<Color>,
+    /// Tree-wide default properties. `None` keeps whatever the app
+    /// builder set at startup. When `Some` and the `Arc` identity
+    /// changes between rebuilds, it is pushed to the render root —
+    /// enabling runtime theme swaps. Compared by `Arc` pointer, so a
+    /// host should cache the `Arc` and only rebuild it when the theme
+    /// actually changes (else every frame re-applies).
+    pub(crate) default_properties: Option<Arc<DefaultProperties>>,
 }
 
 pub(crate) type WindowViewState = <Box<AnyWidgetView<(), ()>> as View<(), (), ViewCtx>>::ViewState;
@@ -37,6 +47,7 @@ pub fn window<V: WidgetView<State>, State: 'static>(
         options: WindowOptions::new(title),
         masonry_root: MasonryRoot::new(root_view),
         base_color: None,
+        default_properties: None,
     }
 }
 
@@ -55,6 +66,17 @@ impl<State> WindowView<State> {
     /// This is [`masonry::theme::BACKGROUND_COLOR`] by default.
     pub fn with_base_color(mut self, color: Color) -> Self {
         self.base_color = Some(color);
+        self
+    }
+
+    /// Set the tree-wide default properties reactively.
+    ///
+    /// Pass the same `Arc` each frame and only swap it when the theme
+    /// changes; on swap the new set is applied to the live render root
+    /// and every widget repaints. `None` (the default) leaves the
+    /// startup set untouched.
+    pub fn with_default_properties(mut self, default_properties: Arc<DefaultProperties>) -> Self {
+        self.default_properties = Some(default_properties);
         self
     }
 }
@@ -108,6 +130,19 @@ impl<State> View<State, (), ViewCtx> for WindowView<State> {
             && let Some(base_color) = self.base_color
         {
             *window.base_color() = base_color;
+        }
+
+        // Runtime default-properties swap: apply only when the `Arc`
+        // identity changed (a host caches it and rebuilds on theme
+        // change), so steady-state frames don't re-apply.
+        if let Some(props) = &self.default_properties {
+            let changed = match &prev.default_properties {
+                Some(prev_props) => !Arc::ptr_eq(prev_props, props),
+                None => true,
+            };
+            if changed {
+                window.render_root().set_default_properties(props.clone());
+            }
         }
 
         self.masonry_root.rebuild(
