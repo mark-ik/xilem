@@ -772,7 +772,10 @@ impl MeasureCtx<'_> {
 impl LayoutCtx<'_> {
     #[track_caller]
     fn assert_layout_done(&self, child: &WidgetPod<impl Widget + ?Sized>, method_name: &str) {
-        if self.get_child_state(child).needs_layout() {
+        let child_state = self.get_child_state(child);
+        // If debug_assertions are enabled, then request_layout is always true until visited.
+        let child_not_visited = cfg!(debug_assertions) && child_state.request_layout;
+        if child_state.needs_layout() || child_not_visited {
             debug_panic!(
                 "Error in {}: trying to call '{}' with child '{}' {} before computing its layout",
                 self.widget_id(),
@@ -924,7 +927,7 @@ impl LayoutCtx<'_> {
             insets.x1 - self.widget_state.border_box_insets.x1,
             insets.y1 - self.widget_state.border_box_insets.y1,
         );
-        self.widget_state.paint_insets = insets.nonnegative();
+        self.widget_state.paint_box_insets = insets.nonnegative();
     }
 
     /// Sets explicit baselines for this widget.
@@ -1119,12 +1122,6 @@ impl LayoutCtx<'_> {
 }
 
 impl ComposeCtx<'_> {
-    // TODO - Remove?
-    /// Returns whether [`Widget::compose`] will be called on this widget.
-    pub fn needs_compose(&self) -> bool {
-        self.widget_state.needs_compose
-    }
-
     /// Sets the scroll translation for the child widget.
     ///
     /// The translation is applied on top of the position from [`LayoutCtx::place_child`].
@@ -1303,11 +1300,6 @@ impl_context_method!(
             self.widget_state.border_box_translation()
         }
 
-        /// Returns the widget's effective border-box origin in the window's coordinate space.
-        pub fn window_origin(&self) -> Point {
-            self.widget_state.border_box_window_origin()
-        }
-
         /// Returns the global transform mapping this widget's content-box coordinate space
         /// to the window's coordinate space.
         ///
@@ -1339,25 +1331,15 @@ impl_context_method!(
             let translation = self.widget_state.border_box_translation();
             self.widget_state.window_transform * (point + translation)
         }
+
+        /// Returns the DPI scaling factor.
+        ///
+        /// This can be useful for loading image resources meant for a specific scale.
+        pub fn scale_factor(&self) -> f64 {
+            self.global_state.scale_factor
+        }
     }
 );
-
-impl_context_method!(AccessCtx<'_>, EventCtx<'_>, PaintCtx<'_>, {
-    /// Returns DPI scaling factor.
-    ///
-    /// This is not required for most widgets, and should be used only for precise
-    /// rendering, such as rendering single pixel lines or selecting image variants.
-    /// This is currently only provided in the render stages, as these are the only passes which
-    /// are re-run when the scale factor changes, except [`EventCtx`] where it is necessary to
-    /// translate pointer events which are currently in physical coordinates.
-    ///
-    /// Note that accessibility nodes and paint results will automatically be scaled by Masonry.
-    /// This also doesn't account for the widget's current transform, which cannot currently be
-    /// accessed by widgets directly.
-    pub fn get_scale_factor(&self) -> f64 {
-        self.global_state.scale_factor
-    }
-});
 
 // --- MARK: GET STATUS
 
