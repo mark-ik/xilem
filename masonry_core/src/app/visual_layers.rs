@@ -58,6 +58,18 @@ impl VisualLayerPlan {
             VisualLayerKind::External { .. } => false,
         })
     }
+
+    /// The external placeholder layers, in painter order.
+    ///
+    /// These carry the bounds of regions whose content is composited by the
+    /// host (e.g. an imported GPU texture) rather than by Masonry's scene
+    /// renderer. [`overlay_layers`](Self::overlay_layers) skips them; a host
+    /// that realizes external content reads them here.
+    pub fn external_layers(&self) -> impl Iterator<Item = &VisualLayer> {
+        self.layers
+            .iter()
+            .filter(|layer| matches!(layer.kind, VisualLayerKind::External { .. }))
+    }
 }
 
 /// A single visual layer in Masonry's paint output.

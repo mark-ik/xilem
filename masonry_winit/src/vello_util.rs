@@ -201,6 +201,7 @@ impl RenderContext {
             view_formats: vec![],
         };
         let (target_texture, target_view) = create_targets(width, height, &device_handle.device);
+        let external_compositor = ExternalCompositor::new(&device_handle.device);
 
         let surface = RenderSurface {
             surface,
@@ -210,6 +211,7 @@ impl RenderContext {
             target_texture,
             target_view,
             blitter,
+            external_compositor,
             resizing: false,
         };
         self.configure_surface(&surface);
@@ -362,6 +364,183 @@ fn create_targets(width: u32, height: u32, device: &Device) -> (Texture, Texture
     (target_texture, target_view)
 }
 
+/// Composites a host-supplied wgpu texture into the window's target texture at
+/// a given viewport rect, after Masonry's scene render and before the surface
+/// blit. This realizes `VisualLayerKind::External` placeholder layers (e.g. an
+/// imported Servo/GPU frame). Built once per surface; the pipeline is keyed to
+/// the `create_targets` format (`Rgba8Unorm`).
+pub(crate) struct ExternalCompositor {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+}
+
+impl ExternalCompositor {
+    fn new(device: &Device) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("external-composite-shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                r#"
+                struct VsOut {
+                    @builtin(position) pos: vec4<f32>,
+                    @location(0) uv: vec2<f32>,
+                };
+                @vertex
+                fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
+                    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+                    var out: VsOut;
+                    out.uv = uv;
+                    out.pos = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+                    return out;
+                }
+                @group(0) @binding(0) var src_tex: texture_2d<f32>;
+                @group(0) @binding(1) var src_smp: sampler;
+                @fragment
+                fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
+                    return textureSample(src_tex, src_smp, in.uv);
+                }
+                "#
+                .into(),
+            ),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("external-composite-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("external-composite-sampler"),
+            compare: None,
+            border_color: None,
+            lod_min_clamp: 0.0,
+            lod_max_clamp: 0.0,
+            anisotropy_clamp: 1,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("external-composite-pipeline-layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            immediate_size: 0,
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("external-composite-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        Self {
+            pipeline,
+            bind_group_layout,
+            sampler,
+        }
+    }
+
+    /// Draw `source` into `target_view` within `viewport` (physical px,
+    /// `[x, y, w, h]`), preserving existing content elsewhere.
+    pub(crate) fn composite(
+        &self,
+        device: &Device,
+        queue: &wgpu::Queue,
+        target_view: &TextureView,
+        source: &Texture,
+        viewport: [f32; 4],
+    ) {
+        let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("external-composite-bind-group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("external-composite-encoder"),
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("external-composite-pass"),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                depth_stencil_attachment: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                multiview_mask: None,
+            });
+            pass.set_viewport(
+                viewport[0],
+                viewport[1],
+                viewport[2],
+                viewport[3],
+                0.0,
+                1.0,
+            );
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+    }
+}
+
 /// Combination of surface and its configuration.
 pub(crate) struct RenderSurface<'s> {
     pub surface: Surface<'s>,
@@ -371,6 +550,7 @@ pub(crate) struct RenderSurface<'s> {
     pub target_texture: Texture,
     pub target_view: TextureView,
     pub blitter: TextureBlitter,
+    pub external_compositor: ExternalCompositor,
     pub resizing: bool,
 }
 

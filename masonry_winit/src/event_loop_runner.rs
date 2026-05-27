@@ -133,6 +133,10 @@ pub struct Window {
     event_reducer: WindowEventReducer,
     pub(crate) render_root: RenderRoot,
     pub(crate) base_color: Color,
+    /// Host-supplied texture composited into this window's `External`
+    /// placeholder region each frame (e.g. an imported GPU frame). Set via
+    /// [`MasonryState::set_external_texture`].
+    pub(crate) external_texture: Option<wgpu::Texture>,
 }
 
 impl Window {
@@ -167,6 +171,7 @@ impl Window {
                 },
             ),
             base_color,
+            external_texture: None,
         }
     }
 
@@ -600,6 +605,18 @@ impl MasonryState<'_> {
         window.handle.set_ime_allowed(false);
     }
 
+    /// Set (or clear) the texture composited into `window_id`'s `External`
+    /// placeholder region on the next frame. The texture must live on the same
+    /// wgpu device Masonry renders with (obtain it via
+    /// [`AppDriver::on_wgpu_ready`](crate::AppDriver::on_wgpu_ready)).
+    pub fn set_external_texture(&mut self, window_id: WindowId, texture: Option<wgpu::Texture>) {
+        if let Some(handle_id) = self.window_id_to_handle_id.get(&window_id) {
+            if let Some(window) = self.windows.get_mut(handle_id) {
+                window.external_texture = texture;
+            }
+        }
+    }
+
     // --- MARK: REDRAW
     fn redraw(&mut self, handle_id: HandleId, app_driver: &mut dyn AppDriver) {
         let _span = info_span!("redraw");
@@ -696,7 +713,29 @@ impl MasonryState<'_> {
             root_scene,
             &overlays,
         );
-        Self::render(surface, window, frame, &self.render_cx, &mut self.renderer);
+        // Window-space (physical px) viewport of the first External placeholder
+        // layer, if any — where a host external texture gets composited.
+        let scale = window.handle.scale_factor();
+        let external_viewport = visual_layers.external_layers().next().map(|layer| {
+            let VisualLayerKind::External { bounds } = &layer.kind else {
+                unreachable!("external_layers yields only External layers")
+            };
+            let r = layer.transform.transform_rect_bbox(*bounds);
+            [
+                (r.x0 * scale) as f32,
+                (r.y0 * scale) as f32,
+                (r.width() * scale) as f32,
+                (r.height() * scale) as f32,
+            ]
+        });
+        Self::render(
+            surface,
+            window,
+            frame,
+            &self.render_cx,
+            &mut self.renderer,
+            external_viewport,
+        );
         #[cfg(feature = "tracy")]
         drop(self.frame.take());
         if let Some(tree_update) = tree_update {
@@ -711,6 +750,7 @@ impl MasonryState<'_> {
         frame: PreparedFrame<'_>,
         render_cx: &RenderContext,
         renderer: &mut ImagingRenderer,
+        external_viewport: Option<[f32; 4]>,
     ) {
         let dev_id = surface.dev_id;
         let device = &render_cx.devices[dev_id].device;
@@ -741,6 +781,15 @@ impl MasonryState<'_> {
             );
             return;
         }
+
+        // Composite a host-supplied external texture (e.g. an imported GPU
+        // frame) into the External placeholder region, over the Vello render.
+        if let (Some(texture), Some(viewport)) = (&window.external_texture, external_viewport) {
+            surface
+                .external_compositor
+                .composite(device, queue, &surface.target_view, texture, viewport);
+        }
+
         Self::present_surface(surface, surface_texture, &window.handle, device, queue);
     }
 
