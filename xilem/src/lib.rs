@@ -175,7 +175,7 @@ mod window_options;
 mod window_view;
 
 pub use app::{AppState, ExitOnClose, Xilem};
-pub use driver::{MasonryDriver, async_action};
+pub use driver::{ExternalCompositor, MasonryDriver, async_action};
 pub use window_options::WindowOptions;
 pub use window_view::{PodWindow, WindowView, window};
 

@@ -8,8 +8,17 @@ use std::sync::Arc;
 use masonry::core::{ErasedAction, WidgetId};
 use masonry::peniko::Blob;
 use masonry_winit::app::{
-    AppDriver, DriverCtx, MasonryState, MasonryUserEvent, NewWindow, WindowId,
+    AppDriver, DriverCtx, ExternalCompositeCtx, MasonryState, MasonryUserEvent, NewWindow, WindowId,
 };
+
+/// App-provided hook for compositing `PaintLayerMode::External` layers.
+///
+/// Masonry reserves a region per external-layer widget and, each frame, hands
+/// the embedder the shared WGPU device/queue, the render target, and the layers
+/// (`widget_id` + physical bounds). This closure draws each layer's content into
+/// the target at its bounds (e.g. an engine's WebView texture via
+/// `copy_texture_to_texture`). See [`crate::Xilem::with_external_compositor`].
+pub type ExternalCompositor = Box<dyn FnMut(&mut ExternalCompositeCtx<'_>)>;
 
 use crate::core::{
     DynMessage, MessageCtx, MessageResult, ProxyError, RawProxy, SendMessage, View, ViewId,
@@ -33,6 +42,8 @@ pub struct MasonryDriver<State: 'static, Logic> {
     fonts: Vec<Blob<u8>>,
     // Optional callback invoked once on startup, after windows creation.
     start_callback: Option<Box<dyn FnOnce(&mut MasonryState<'_>)>>,
+    // Optional per-frame hook for compositing external-surface layers.
+    external_compositor: Option<ExternalCompositor>,
 }
 
 struct Window<State: 'static> {
@@ -57,6 +68,7 @@ where
         default_base_color: Color,
         fonts: Vec<Blob<u8>>,
         start_callback: Option<Box<dyn FnOnce(&mut MasonryState<'_>)>>,
+        external_compositor: Option<ExternalCompositor>,
     ) -> (Self, Vec<NewWindow>) {
         let mut driver = Self {
             state,
@@ -67,6 +79,7 @@ where
             default_base_color,
             fonts,
             start_callback,
+            external_compositor,
         };
         let windows: Vec<_> = (driver.logic)(&mut driver.state)
             .map(|view| driver.build_window(view))
@@ -375,6 +388,12 @@ where
         // Calls callback functions after windows creation.
         if let Some(cb) = self.start_callback.take() {
             cb(state);
+        }
+    }
+
+    fn composite_external_layers(&mut self, ctx: &mut ExternalCompositeCtx<'_>) {
+        if let Some(compositor) = self.external_compositor.as_mut() {
+            compositor(ctx);
         }
     }
 

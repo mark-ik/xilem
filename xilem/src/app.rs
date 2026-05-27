@@ -13,7 +13,7 @@ use winit::error::EventLoopError;
 
 use crate::core::map_state;
 use crate::window_options::WindowCallbacks;
-use crate::{MasonryDriver, WidgetView, WindowOptions, WindowView};
+use crate::{ExternalCompositor, MasonryDriver, WidgetView, WindowOptions, WindowView};
 
 // TODO - Rename to `AppLauncher` or something.
 
@@ -29,6 +29,8 @@ pub struct Xilem<State, Logic> {
     fonts: Vec<Blob<u8>>,
     // Callback invoked once on startup, after windows creation.
     on_start: Option<Box<dyn FnOnce(&mut MasonryState<'_>)>>,
+    // Per-frame hook for compositing external-surface layers.
+    external_compositor: Option<ExternalCompositor>,
 }
 
 /// State type used by [`Xilem::new_simple`].
@@ -150,6 +152,7 @@ where
             default_base_color: BACKGROUND_COLOR,
             fonts: Vec::new(),
             on_start: None,
+            external_compositor: None,
         }
     }
 
@@ -178,6 +181,21 @@ where
     /// Registers a callback to be called once the application has started
     pub fn with_on_start(mut self, callback: impl FnOnce(&mut MasonryState<'_>) + 'static) -> Self {
         self.on_start = Some(Box::new(callback));
+        self
+    }
+
+    /// Registers a per-frame hook for compositing `PaintLayerMode::External`
+    /// layers (e.g. an engine WebView texture) onto the window surface.
+    ///
+    /// The closure runs after Masonry paints its own content and before
+    /// present, receiving the shared WGPU device/queue, the render target, and
+    /// the external layers to realize this frame (each with its `widget_id` and
+    /// physical bounds). See [`ExternalCompositor`].
+    pub fn with_external_compositor(
+        mut self,
+        compositor: impl FnMut(&mut masonry_winit::app::ExternalCompositeCtx<'_>) + 'static,
+    ) -> Self {
+        self.external_compositor = Some(Box::new(compositor));
         self
     }
 
@@ -210,6 +228,7 @@ where
             self.default_base_color,
             self.fonts,
             self.on_start,
+            self.external_compositor,
         )
     }
 }
