@@ -617,6 +617,23 @@ impl MasonryState<'_> {
         }
     }
 
+    /// The wgpu `Device`/`Queue` Masonry renders with, once a surface exists
+    /// (i.e. after the first redraw). Lets the host build GPU resources (e.g. an
+    /// interop importer) on the same device as the renderer. Returns the first
+    /// device in the pool; Masonry shares one device across windows.
+    pub fn render_device(&self) -> Option<(wgpu::Device, wgpu::Queue)> {
+        self.render_cx
+            .devices
+            .first()
+            .map(|d| (d.device.clone(), d.queue.clone()))
+    }
+
+    /// The ids of all currently-known windows, in arbitrary order. A
+    /// single-window app can take the first.
+    pub fn window_ids(&self) -> Vec<WindowId> {
+        self.window_id_to_handle_id.keys().copied().collect()
+    }
+
     // --- MARK: REDRAW
     fn redraw(&mut self, handle_id: HandleId, app_driver: &mut dyn AppDriver) {
         let _span = info_span!("redraw");
