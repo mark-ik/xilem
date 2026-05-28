@@ -634,6 +634,17 @@ impl MasonryState<'_> {
         self.window_id_to_handle_id.keys().copied().collect()
     }
 
+    /// Request a redraw of `window_id`. A host driving continuously-updating
+    /// external content (e.g. live web frames) calls this after supplying a new
+    /// frame via [`set_external_texture`](Self::set_external_texture).
+    pub fn request_redraw(&self, window_id: WindowId) {
+        if let Some(handle_id) = self.window_id_to_handle_id.get(&window_id) {
+            if let Some(window) = self.windows.get(handle_id) {
+                window.handle.request_redraw();
+            }
+        }
+    }
+
     // --- MARK: REDRAW
     fn redraw(&mut self, handle_id: HandleId, app_driver: &mut dyn AppDriver) {
         let _span = info_span!("redraw");
