@@ -106,6 +106,11 @@ pub struct ExternalCompositeCtx<'a> {
     pub surface_size: (u32, u32),
     /// External layers to realize this frame, in painter order.
     pub layers: &'a [ExternalLayer],
+    /// The host window backing this surface. Embedders that realize an external
+    /// layer with a child surface (e.g. a system WebView via `scrying`) need the
+    /// platform window handle (HWND / NSView / etc.) as the parent; the device
+    /// alone is not enough. Use [`raw_window_handle`] on this to obtain it.
+    pub window: &'a winit::window::Window,
 }
 
 /// Strategy for selecting `wgpu::Limits` when requesting the WGPU device.

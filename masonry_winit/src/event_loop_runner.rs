@@ -800,6 +800,7 @@ impl MasonryState<'_> {
                 target_view: &surface.target_view,
                 surface_size: (surface.config.width, surface.config.height),
                 layers: external,
+                window: window.handle(),
             };
             app_driver.composite_external_layers(&mut ctx);
         }
