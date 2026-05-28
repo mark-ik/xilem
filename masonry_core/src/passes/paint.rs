@@ -53,10 +53,18 @@ impl LayerCollector {
         });
     }
 
-    fn push_external_layer(&mut self, widget_id: WidgetId, bounds: kurbo::Rect) {
+    fn push_external_layer(
+        &mut self,
+        widget_id: WidgetId,
+        bounds: kurbo::Rect,
+        transform: Affine,
+    ) {
+        // The bounds are the widget's border-box-local rect; the transform maps
+        // that into window space (the widget's position), so the embedder
+        // composites the external content where the widget actually sits.
         self.layers.push(VisualLayer {
             kind: VisualLayerKind::External { bounds },
-            transform: self.transform,
+            transform,
             widget_id,
         });
     }
@@ -95,7 +103,6 @@ fn paint_widget(
     // TODO - Handle damage regions
     // https://github.com/linebender/xilem/issues/789
 
-    state.paint_layer_mode = PaintLayerMode::Inline;
     if (state.request_pre_paint || state.request_paint || state.request_post_paint) && !is_stashed {
         if trace {
             trace!("Painting widget '{}' {}", widget.short_type_name(), id);
@@ -124,6 +131,13 @@ fn paint_widget(
             widget.pre_paint(&mut ctx, &props, &mut painter);
         }
         if ctx.widget_state.request_paint {
+            // Reset the layer mode only when the widget actually repaints, so a
+            // cached (clean) frame keeps the mode from its last paint. A widget
+            // sets its mode inside `paint`; resetting unconditionally each pass
+            // would drop an external-layer widget's `External` mode on every
+            // clean frame, so its reserved layer (and the embedder's composited
+            // content) would vanish until the next repaint.
+            ctx.widget_state.paint_layer_mode = PaintLayerMode::Inline;
             scene.clear();
             let sink_dyn: &mut dyn PaintSink = scene;
             let mut painter = Painter::new(sink_dyn);
@@ -265,7 +279,11 @@ fn paint_widget(
     }
 
     if paint_as_external {
-        layer_collector.push_external_layer(id, state.border_box_size().to_rect());
+        layer_collector.push_external_layer(
+            id,
+            state.border_box_size().to_rect(),
+            border_box_to_layer_transform,
+        );
     }
 
     if matches!(
