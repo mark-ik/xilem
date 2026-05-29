@@ -413,18 +413,49 @@ impl RenderRoot {
         &mut self.property_arena
     }
 
-    /// Replace the tree-wide default properties at runtime and mark
-    /// every widget for repaint.
+    /// Replace the tree-wide default properties at runtime.
     ///
-    /// The default property set is normally fixed at construction.
-    /// This lets a host swap it mid-session — e.g. a light/dark theme
-    /// toggle that re-colors widgets relying on default `ContentColor`
-    /// / `Background` rather than per-widget overrides. Only repaint is
-    /// requested (default-property *color* changes don't affect
-    /// layout); if a swap ever changes layout-affecting defaults
-    /// (padding, border width), request layout separately.
+    /// The default property set is normally fixed at construction. This lets
+    /// a host swap it mid-session, e.g. a light/dark theme toggle that
+    /// re-colors widgets relying on default `ContentColor` / `Background`.
+    ///
+    /// A whole-set swap can change the effective value of any *defaulted*
+    /// property on any widget, but the resolved stack index of a defaulted
+    /// property does not change (only the fallback value does), so a bare
+    /// repaint would skip the reactive work. Instead this marks every widget
+    /// for the update-properties pass and invalidates each property cache, so
+    /// the pass re-fires [`Widget::property_changed`] for every cached
+    /// property across the tree (running each widget's proper update path),
+    /// then requests a repaint.
+    ///
+    /// [`Widget::property_changed`]: crate::core::Widget::property_changed
     pub fn set_default_properties(&mut self, default_properties: Arc<DefaultProperties>) {
         self.property_arena.default_properties = default_properties;
+
+        // Mark the whole tree for the update-properties pass: `needs_update_props`
+        // so the pass descends to every node, `request_update_props` to enter the
+        // cache-eviction branch, and `invalidated` so every cached entry re-fires
+        // `property_changed` regardless of its (unchanged) resolved index.
+        fn invalidate_props_all_in(node: ArenaMut<'_, WidgetArenaNode>) {
+            let children = node.children;
+            let widget = &mut *node.item.widget;
+            let state = &mut node.item.state;
+
+            state.request_update_props = true;
+            state.needs_update_props = true;
+            state.property_cache.invalidated = true;
+
+            let id = state.id;
+            recurse_on_children(id, widget, children, |node| {
+                invalidate_props_all_in(node);
+            });
+        }
+        let root_node = self.widget_arena.get_node_mut(self.root_id());
+        invalidate_props_all_in(root_node);
+
+        // Kick the pass cycle + repaint. `property_changed` (via
+        // `core_property_changed`) requests the appropriate per-widget paint
+        // / layout as each cached property is re-evaluated.
         self.request_render_all();
     }
 
