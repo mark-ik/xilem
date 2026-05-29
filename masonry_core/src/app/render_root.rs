@@ -421,12 +421,12 @@ impl RenderRoot {
     ///
     /// A whole-set swap can change the effective value of any *defaulted*
     /// property on any widget, but the resolved stack index of a defaulted
-    /// property does not change (only the fallback value does), so a bare
-    /// repaint would skip the reactive work. Instead this marks every widget
-    /// for the update-properties pass and invalidates each property cache, so
-    /// the pass re-fires [`Widget::property_changed`] for every cached
-    /// property across the tree (running each widget's proper update path),
-    /// then requests a repaint.
+    /// property does not change (only the fallback value does). So rather than
+    /// repainting, this marks every widget for the update-properties pass and
+    /// invalidates each property cache: the pass then re-fires
+    /// [`Widget::property_changed`] for every cached property across the tree,
+    /// and each widget's handler (with the built-in `core_property_changed`)
+    /// requests whatever paint or layout that property actually needs.
     ///
     /// [`Widget::property_changed`]: crate::core::Widget::property_changed
     pub fn set_default_properties(&mut self, default_properties: Arc<DefaultProperties>) {
@@ -452,11 +452,6 @@ impl RenderRoot {
         }
         let root_node = self.widget_arena.get_node_mut(self.root_id());
         invalidate_props_all_in(root_node);
-
-        // Kick the pass cycle + repaint. `property_changed` (via
-        // `core_property_changed`) requests the appropriate per-widget paint
-        // / layout as each cached property is re-evaluated.
-        self.request_render_all();
     }
 
     pub(crate) fn root_id(&self) -> WidgetId {
