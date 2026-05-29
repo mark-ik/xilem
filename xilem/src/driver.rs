@@ -8,7 +8,8 @@ use std::sync::Arc;
 use masonry::core::{ErasedAction, WidgetId};
 use masonry::peniko::Blob;
 use masonry_winit::app::{
-    AppDriver, DriverCtx, ExternalCompositeCtx, MasonryState, MasonryUserEvent, NewWindow, WindowId,
+    AppDriver, DriverCtx, ExternalCompositeCtx, MasonryState, MasonryUserEvent, NewWindow, TickCtx,
+    WindowId,
 };
 
 /// App-provided hook for compositing `PaintLayerMode::External` layers.
@@ -19,6 +20,14 @@ use masonry_winit::app::{
 /// the target at its bounds (e.g. an engine's WebView texture via
 /// `copy_texture_to_texture`). See [`crate::Xilem::with_external_compositor`].
 pub type ExternalCompositor = Box<dyn FnMut(&mut ExternalCompositeCtx<'_>)>;
+
+/// App-provided per-tick hook (main thread, outside `render()`).
+///
+/// Runs once per event-loop iteration. The safe place to drive
+/// message-loop-pumping work (e.g. a `scrying` WebView producer: construct,
+/// navigate, poll frames) that must not happen in [`ExternalCompositor`]
+/// (which runs inside `render()`). See [`crate::Xilem::with_on_tick`].
+pub type OnTick = Box<dyn FnMut(&mut TickCtx<'_>)>;
 
 use crate::core::{
     DynMessage, MessageCtx, MessageResult, ProxyError, RawProxy, SendMessage, View, ViewId,
@@ -44,6 +53,8 @@ pub struct MasonryDriver<State: 'static, Logic> {
     start_callback: Option<Box<dyn FnOnce(&mut MasonryState<'_>)>>,
     // Optional per-frame hook for compositing external-surface layers.
     external_compositor: Option<ExternalCompositor>,
+    // Optional per-tick hook (main thread, outside render).
+    on_tick: Option<OnTick>,
 }
 
 struct Window<State: 'static> {
@@ -69,6 +80,7 @@ where
         fonts: Vec<Blob<u8>>,
         start_callback: Option<Box<dyn FnOnce(&mut MasonryState<'_>)>>,
         external_compositor: Option<ExternalCompositor>,
+        on_tick: Option<OnTick>,
     ) -> (Self, Vec<NewWindow>) {
         let mut driver = Self {
             state,
@@ -80,6 +92,7 @@ where
             fonts,
             start_callback,
             external_compositor,
+            on_tick,
         };
         let windows: Vec<_> = (driver.logic)(&mut driver.state)
             .map(|view| driver.build_window(view))
@@ -394,6 +407,12 @@ where
     fn composite_external_layers(&mut self, ctx: &mut ExternalCompositeCtx<'_>) {
         if let Some(compositor) = self.external_compositor.as_mut() {
             compositor(ctx);
+        }
+    }
+
+    fn on_tick(&mut self, ctx: &mut TickCtx<'_>) {
+        if let Some(on_tick) = self.on_tick.as_mut() {
+            on_tick(ctx);
         }
     }
 

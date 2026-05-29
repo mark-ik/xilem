@@ -98,7 +98,7 @@ pub use winit;
 /// Types needed for running a Masonry app.
 pub mod app {
     pub use super::app_driver::{
-        AppDriver, DriverCtx, ExternalCompositeCtx, ExternalLayer, WgpuContext, WgpuLimits,
+        AppDriver, DriverCtx, ExternalCompositeCtx, ExternalLayer, TickCtx, WgpuContext, WgpuLimits,
         WindowId,
     };
     pub use super::event_loop_runner::{

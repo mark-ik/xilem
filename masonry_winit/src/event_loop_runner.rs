@@ -346,6 +346,24 @@ impl ApplicationHandler<MasonryUserEvent> for MainState<'_> {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.masonry_state.handle_about_to_wait(event_loop);
+
+        // Forward a main-thread, outside-render tick to the driver. This is the
+        // safe place for embedders to drive message-loop-pumping work (e.g. a
+        // scrying WebView producer); doing so in `composite_external_layers`
+        // would re-enter `render()`.
+        let MainState { masonry_state, app_driver } = self;
+        let windows: Vec<&winit::window::Window> = masonry_state
+            .windows
+            .values()
+            .map(|window| window.handle())
+            .collect();
+        let device_handle = masonry_state.render_cx.devices.first();
+        let mut ctx = crate::app_driver::TickCtx {
+            device: device_handle.map(|handle| &handle.device),
+            queue: device_handle.map(|handle| &handle.queue),
+            windows: &windows,
+        };
+        app_driver.on_tick(&mut ctx);
     }
 
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {

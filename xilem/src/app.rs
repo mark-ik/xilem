@@ -13,7 +13,7 @@ use winit::error::EventLoopError;
 
 use crate::core::map_state;
 use crate::window_options::WindowCallbacks;
-use crate::{ExternalCompositor, MasonryDriver, WidgetView, WindowOptions, WindowView};
+use crate::{ExternalCompositor, MasonryDriver, OnTick, WidgetView, WindowOptions, WindowView};
 
 // TODO - Rename to `AppLauncher` or something.
 
@@ -31,6 +31,8 @@ pub struct Xilem<State, Logic> {
     on_start: Option<Box<dyn FnOnce(&mut MasonryState<'_>)>>,
     // Per-frame hook for compositing external-surface layers.
     external_compositor: Option<ExternalCompositor>,
+    // Per-tick hook (main thread, outside render).
+    on_tick: Option<OnTick>,
 }
 
 /// State type used by [`Xilem::new_simple`].
@@ -153,6 +155,7 @@ where
             fonts: Vec::new(),
             on_start: None,
             external_compositor: None,
+            on_tick: None,
         }
     }
 
@@ -199,6 +202,21 @@ where
         self
     }
 
+    /// Registers a per-tick hook run on the main thread once per event-loop
+    /// iteration, **outside** any `render()` pass. The safe place to drive
+    /// message-loop-pumping work (constructing/navigating/polling a system
+    /// WebView via `scrying`) that must not run inside
+    /// [`Self::with_external_compositor`] (which runs inside `render()`). The
+    /// closure receives the shared device/queue (once created) and the open
+    /// windows. See [`OnTick`].
+    pub fn with_on_tick(
+        mut self,
+        on_tick: impl FnMut(&mut masonry_winit::app::TickCtx<'_>) + 'static,
+    ) -> Self {
+        self.on_tick = Some(Box::new(on_tick));
+        self
+    }
+
     /// Run app with custom window attributes.
     pub fn run_in(mut self, mut event_loop: EventLoopBuilder) -> Result<(), EventLoopError> {
         let event_loop = event_loop.build()?;
@@ -229,6 +247,7 @@ where
             self.fonts,
             self.on_start,
             self.external_compositor,
+            self.on_tick,
         )
     }
 }

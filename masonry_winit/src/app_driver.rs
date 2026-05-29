@@ -113,6 +113,27 @@ pub struct ExternalCompositeCtx<'a> {
     pub window: &'a winit::window::Window,
 }
 
+/// Per-tick access handed to [`AppDriver::on_tick`], which runs on the main
+/// thread **outside** any `render()` pass (forwarded from winit's
+/// `about_to_wait`). This is the safe place to drive work that pumps the OS
+/// message loop — e.g. constructing or navigating a system WebView (`scrying`),
+/// which would re-enter `render()` if done from
+/// [`AppDriver::composite_external_layers`].
+///
+/// `device`/`queue` are the shared WGPU device (the same ones handed to
+/// [`AppDriver::on_wgpu_ready`] / [`ExternalCompositeCtx`]); they are `None`
+/// until the first frame creates the device. `windows` exposes the open windows
+/// for parent-handle access (`raw_window_handle`) and `request_redraw`.
+pub struct TickCtx<'a> {
+    /// The shared WGPU device, once created (`None` before the first frame).
+    pub device: Option<&'a wgpu::Device>,
+    /// The shared WGPU queue, once created.
+    pub queue: Option<&'a wgpu::Queue>,
+    /// Currently-open windows, in arbitrary order. Use for parent-window
+    /// handles and to `request_redraw` when new external content is ready.
+    pub windows: &'a [&'a winit::window::Window],
+}
+
 /// Strategy for selecting `wgpu::Limits` when requesting the WGPU device.
 #[derive(Clone, Debug, Default)]
 pub enum WgpuLimits {
@@ -182,6 +203,14 @@ pub trait AppDriver {
     /// [`ExternalCompositeCtx::target_texture`]. Default: no-op (the
     /// layers are left as reserved holes).
     fn composite_external_layers(&mut self, _ctx: &mut ExternalCompositeCtx<'_>) {}
+
+    /// Called on the main thread once per event-loop iteration (forwarded from
+    /// winit's `about_to_wait`), **outside** any `render()` pass. The safe place
+    /// to drive work that pumps the OS message loop — constructing/navigating a
+    /// system WebView, polling it for frames — which must *not* happen inside
+    /// [`Self::composite_external_layers`] (that runs inside `render()`; pumping
+    /// there re-enters the event loop and thus `render()`). Default: no-op.
+    fn on_tick(&mut self, _ctx: &mut TickCtx<'_>) {}
 }
 
 impl DriverCtx<'_, '_> {
