@@ -55,20 +55,23 @@ tree_arena = { version = "0.2.0", path = "tree_arena" }
 include_doc_path = { version = "0.1.0", path = "include_doc_path", package = "linebender_include_doc_path" }
 
 anymore = "1.0.0"
-# Local fork (../imaging) on branch `mere-wgpu-29-vello-0-9` — adds
-# `wgpu-29` + `vello-0-9` features the upstream doesn't ship yet.
-# Drop back to the github git-rev pin when forest-rs/imaging merges the
-# additions upstream.
-imaging = { path = "../imaging/imaging" }
-imaging_wgpu = { path = "../imaging/imaging_wgpu", default-features = false, features = [
+# Fork (github.com/mark-ik/imaging) on branch `mere-wgpu-29-vello-0-9` —
+# adds the `wgpu-29` + `vello-0-9` features the upstream doesn't ship yet.
+# Git (not a relative path) so this fork is self-contained: anyone consuming
+# this xilem fork via git resolves imaging via git too, with no sibling
+# `../imaging` checkout. For local imaging dev, override via a gitignored
+# `.cargo/config.toml` `paths` entry. Drop back to crates.io when forest-rs/
+# imaging merges the additions upstream.
+imaging = { git = "https://github.com/mark-ik/imaging", branch = "mere-wgpu-29-vello-0-9" }
+imaging_wgpu = { git = "https://github.com/mark-ik/imaging", branch = "mere-wgpu-29-vello-0-9", default-features = false, features = [
     "wgpu-29",
 ] }
-imaging_vello = { path = "../imaging/imaging_vello", default-features = false, features = [
+imaging_vello = { git = "https://github.com/mark-ik/imaging", branch = "mere-wgpu-29-vello-0-9", default-features = false, features = [
     "vello-0-9",
 ] }
-imaging_vello_hybrid = { path = "../imaging/imaging_vello_hybrid" }
-imaging_vello_cpu = { path = "../imaging/imaging_vello_cpu" }
-imaging_skia = { path = "../imaging/imaging_skia", features = [
+imaging_vello_hybrid = { git = "https://github.com/mark-ik/imaging", branch = "mere-wgpu-29-vello-0-9" }
+imaging_vello_cpu = { git = "https://github.com/mark-ik/imaging", branch = "mere-wgpu-29-vello-0-9" }
+imaging_skia = { git = "https://github.com/mark-ik/imaging", branch = "mere-wgpu-29-vello-0-9", features = [
     "gpu",
 ] }
 vello = { version = "0.9.0", default-features = false, features = ["wgpu"] }
