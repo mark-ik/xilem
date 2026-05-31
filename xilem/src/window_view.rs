@@ -3,8 +3,7 @@
 
 use std::sync::Arc;
 
-use masonry::core::DefaultProperties;
-use masonry::{theme::BACKGROUND_COLOR, util::debug_panic};
+use masonry::{core::DefaultProperties, theme::BACKGROUND_COLOR, util::debug_panic};
 use masonry_winit::app::{NewWindow, Window, WindowId};
 
 use crate::core::{MessageCtx, Mut, View, ViewElement, ViewMarker};
@@ -19,12 +18,7 @@ pub struct WindowView<State: 'static> {
     pub(crate) masonry_root: MasonryRoot<State>,
     /// The base color of the window.
     pub(crate) base_color: Option<Color>,
-    /// Tree-wide default properties. `None` keeps whatever the app
-    /// builder set at startup. When `Some` and the `Arc` identity
-    /// changes between rebuilds, it is pushed to the render root —
-    /// enabling runtime theme swaps. Compared by `Arc` pointer, so a
-    /// host should cache the `Arc` and only rebuild it when the theme
-    /// actually changes (else every frame re-applies).
+    /// Tree-wide default properties, applied on `Arc` identity change.
     pub(crate) default_properties: Option<Arc<DefaultProperties>>,
 }
 
@@ -69,12 +63,10 @@ impl<State> WindowView<State> {
         self
     }
 
-    /// Set the tree-wide default properties reactively.
+    /// Set tree-wide default properties for runtime theme swaps.
     ///
-    /// Pass the same `Arc` each frame and only swap it when the theme
-    /// changes; on swap the new set is applied to the live render root
-    /// and every widget repaints. `None` (the default) leaves the
-    /// startup set untouched.
+    /// Applied on `Arc` identity change; cache the value so a new identity
+    /// only appears when the theme actually changes.
     pub fn with_default_properties(mut self, default_properties: Arc<DefaultProperties>) -> Self {
         self.default_properties = Some(default_properties);
         self
@@ -132,17 +124,13 @@ impl<State> View<State, (), ViewCtx> for WindowView<State> {
             *window.base_color() = base_color;
         }
 
-        // Runtime default-properties swap: apply only when the `Arc`
-        // identity changed (a host caches it and rebuilds on theme
-        // change), so steady-state frames don't re-apply.
-        if let Some(props) = &self.default_properties {
-            let changed = match &prev.default_properties {
-                Some(prev_props) => !Arc::ptr_eq(prev_props, props),
-                None => true,
-            };
-            if changed {
-                window.render_root().set_default_properties(props.clone());
-            }
+        if let Some(props) = &self.default_properties
+            && prev
+                .default_properties
+                .as_ref()
+                .is_none_or(|p| !Arc::ptr_eq(p, props))
+        {
+            window.render_root().set_default_properties(props.clone());
         }
 
         self.masonry_root.rebuild(
